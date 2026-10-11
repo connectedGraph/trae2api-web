@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   work2api 设计令牌 —— 青色系网关控制台
+   颜色以 "R G B" 三元组存放，供 Tailwind 的 rgb(var(--x) / <alpha>) 消费。
+   暗色为默认；:root.light 覆盖为浅色。
+   ============================================================ */
+:root {
+  --c-bg: 9 13 22; /* #090D16 深蓝黑 */
+  --c-surface: 17 24 37; /* #111825 面板 */
+  --c-elevated: 22 31 47; /* #161F2F 悬浮/表头 */
+  --c-line: 38 50 71; /* #263247 边框 */
+  --c-hairline: 148 163 184; /* 内高光 */
+  --c-ink: 229 237 245; /* 主文字 */
+  --c-muted: 148 163 184; /* 次要 */
+  --c-faint: 100 116 139; /* 最弱 */
+
+  --c-brand: 20 184 166; /* teal-500 */
+  --c-brand-soft: 45 212 191; /* teal-400 */
+  --c-live: 52 211 153; /* emerald-400 */
+  --c-warn: 251 191 36; /* amber-400 */
+  --c-fault: 251 113 133; /* rose-400 */
+  --c-route: 56 189 248; /* sky-400 */
+
+  --glass-bg: 255 255 255; /* 玻璃叠加基色（低透明度） */
+  --glass-alpha: 0.03;
+  color-scheme: dark;
+}
+
+:root.light {
+  --c-bg: 244 247 251; /* #F4F7FB 冷灰白 */
+  --c-surface: 255 255 255;
+  --c-elevated: 248 250 253;
+  --c-line: 226 232 240; /* slate-200 */
+  --c-hairline: 15 23 42;
+  --c-ink: 15 23 42; /* slate-900 */
+  --c-muted: 71 85 105; /* slate-600 */
+  --c-faint: 148 163 184;
+
+  --c-brand: 13 148 136; /* teal-600（浅底更耐看） */
+  --c-brand-soft: 20 184 166;
+  --c-live: 5 150 105; /* emerald-600 */
+  --c-warn: 217 119 6; /* amber-600 */
+  --c-fault: 225 29 72; /* rose-600 */
+  --c-route: 2 132 199; /* sky-600 */
+
+  --glass-bg: 15 23 42;
+  --glass-alpha: 0.02;
+  color-scheme: light;
+}
+
+* { border-color: rgb(var(--c-line)); }
+
+html, body, #app { height: 100%; }
+body {
+  margin: 0;
+  background: rgb(var(--c-bg));
+  color: rgb(var(--c-ink));
+  font-family: 'Inter Variable', Inter, system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 暗色背景加一层极淡的青色光晕，避免死黑 */
+:root:not(.light) body {
+  background-image: radial-gradient(120% 80% at 100% 0%, rgb(var(--c-brand) / 0.06), transparent 55%);
+  background-attachment: fixed;
+}
+
+.mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-feature-settings: 'tnum' 1; }
+
+/* 玻璃面板：低透明度叠加 + 细边 + 轻背光模糊 */
+.glass {
+  background: rgb(var(--glass-bg) / var(--glass-alpha)), rgb(var(--c-surface));
+  background-blend-mode: overlay;
+  border: 1px solid rgb(var(--c-line) / 0.9);
+}
+
+/* 焦点可见性（键盘可达） */
+:focus-visible { outline: 2px solid rgb(var(--c-route)); outline-offset: 2px; border-radius: 4px; }
+
+/* 细滚动条 */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: rgb(var(--c-line)); border-radius: 6px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--c-faint)); background-clip: content-box; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+}

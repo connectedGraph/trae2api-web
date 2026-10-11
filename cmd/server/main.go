@@ -1,4 +1,4 @@
-﻿// main.go trae2api-web 入口：加载配置 → 构建 pool → 起 HTTP 服务。
+// main.go trae2api-web 入口：加载配置 → 构建 pool → 起 HTTP 服务。
 package main
 
 import (
@@ -52,15 +52,19 @@ func main() {
 	})
 
 	h := server.NewHandler(server.Config{
-		Pool:         p,
-		Upstream:     up,
-		APIKey:       cfg.APIKey,
-		AuthDir:      cfg.AuthDir,
-		PlanCooldown: cfg.PlanCreditDur,
-		SoftCooldown: cfg.SoftRateDur,
-		ErrThreshold: cfg.Cooldown.ErrThresh,
-		ErrCooldown:  cfg.ErrCooldownDur,
-		DefaultModel: cfg.DefaultModel,
+		Pool:                   p,
+		Upstream:               up,
+		APIKey:                 cfg.APIKey,
+		AuthDir:                cfg.AuthDir,
+		Listen:                 cfg.Listen,
+		CallbackPort:           cfg.CallbackPort,
+		StateFile:              cfg.StateFile,
+		UpstreamTimeoutSeconds: cfg.Upstream.TimeoutSeconds,
+		PlanCooldown:           cfg.PlanCreditDur,
+		SoftCooldown:           cfg.SoftRateDur,
+		ErrThreshold:           cfg.Cooldown.ErrThresh,
+		ErrCooldown:            cfg.ErrCooldownDur,
+		DefaultModel:           cfg.DefaultModel,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

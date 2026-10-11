@@ -1,4 +1,4 @@
-﻿// Package server 暴露 OpenAI 兼容 HTTP 接口，内部驱动 pool 挑号 + upstream 转发。
+// Package server 暴露 OpenAI 兼容 HTTP 接口，内部驱动 pool 挑号 + upstream 转发。
 package server
 
 import (
@@ -18,17 +18,21 @@ import (
 
 // Config handler 依赖。
 type Config struct {
-	Pool         *pool.Pool
-	Upstream     *upstream.Client
-	APIKey       string        // 空 = 不鉴权
-	AuthDir      string        // auths/ 目录，用于 import/delete 落盘 trae-*.json
-	MaxRotate    int           // 单请求最多换号次数，默认 3
-	PlanCooldown time.Duration // 1005 冷却，默认 12h
-	SoftCooldown time.Duration // 429 冷却，默认 60s
-	ErrThreshold int           // 连续错误阈值，默认 3
-	ErrCooldown  time.Duration // 错误冷却，默认 10m
-	RefreshSkew  time.Duration // token 预刷新窗口，默认 24h
-	DefaultModel string        // 默认 glm-5.2
+	Pool                   *pool.Pool
+	Upstream               *upstream.Client
+	APIKey                 string        // 空 = 不鉴权
+	AuthDir                string        // auths/ 目录，用于 import/delete 落盘 trae-*.json
+	Listen                 string        // 运行时监听地址，仅供管理台展示
+	CallbackPort           string        // 登录回调端口，仅供管理台展示
+	StateFile              string        // 账号池状态文件，仅供管理台展示
+	UpstreamTimeoutSeconds int           // 上游短请求超时，仅供管理台展示
+	MaxRotate              int           // 单请求最多换号次数，默认 3
+	PlanCooldown           time.Duration // 1005 冷却，默认 12h
+	SoftCooldown           time.Duration // 429 冷却，默认 60s
+	ErrThreshold           int           // 连续错误阈值，默认 3
+	ErrCooldown            time.Duration // 错误冷却，默认 10m
+	RefreshSkew            time.Duration // token 预刷新窗口，默认 24h
+	DefaultModel           string        // 默认 glm-5.2
 }
 
 // maxBodyBytes 请求体大小上限（8MB），超过返回 413。
@@ -42,7 +46,8 @@ type Handler struct {
 	// Web 登录 pending 态：pendingID → 登录进行中的临时上下文。
 	// 回调 /authorize 捕获后标记成功；面板轮询 result 取结果。
 	loginMu sync.Mutex
-	logins   map[string]*pendingLogin
+	logins  map[string]*pendingLogin
+	usage   *usageTracker
 }
 
 // NewHandler 构建 handler。
@@ -68,16 +73,21 @@ func NewHandler(cfg Config) *Handler {
 	if cfg.DefaultModel == "" {
 		cfg.DefaultModel = upstream.DefaultConfigName
 	}
-	h := &Handler{cfg: cfg, mux: http.NewServeMux(), logins: map[string]*pendingLogin{}}
+	h := &Handler{cfg: cfg, mux: http.NewServeMux(), logins: map[string]*pendingLogin{}, usage: newUsageTracker()}
 	h.mux.HandleFunc("POST /v1/chat/completions", h.withAuth(h.chatCompletions))
 	h.mux.HandleFunc("GET /v1/models", h.withAuth(h.models))
 	h.mux.HandleFunc("GET /status", h.withAuth(h.status))
 	h.mux.HandleFunc("GET /healthz", h.healthz)
+	h.mux.HandleFunc("GET /health", h.compatHealth)
 	// 管理面板：本地面板
 	// 读接口无鉴权（局域网内只读）；写接口（accounts 写/login/refresh/authorize）
 	// 经 withAdminAuth 校验 Bearer = TW2A_API_KEY（见 §4 安全设计）。
-	h.mux.HandleFunc("GET /admin", h.adminPage)
+	h.mux.HandleFunc("GET /admin", h.adminUIPage)
+	h.mux.HandleFunc("GET /admin-ui", h.adminUIPage)
+	h.mux.Handle("GET /admin-ui/", h.adminUIHandler())
 	h.mux.HandleFunc("GET /admin/api/credits", h.adminCredits)
+	h.mux.HandleFunc("GET /admin/api/key", h.adminKeyInfo)
+	h.mux.HandleFunc("POST /admin/api/key/check", h.withAdminAuth(h.adminKeyCheck))
 	// 账号 CRUD
 	h.mux.HandleFunc("GET /admin/api/accounts", h.adminAccounts)
 	h.mux.HandleFunc("POST /admin/api/accounts/import", h.withAdminAuth(h.adminImportAccount))
@@ -85,6 +95,26 @@ func NewHandler(cfg Config) *Handler {
 	h.mux.HandleFunc("PATCH /admin/api/accounts/{uid}", h.withAdminAuth(h.adminPatchAccount))
 	h.mux.HandleFunc("POST /admin/api/accounts/{uid}/refresh", h.withAdminAuth(h.adminRefreshAccount))
 	h.mux.HandleFunc("GET /admin/api/accounts/{uid}/json", h.adminAccountJSON)
+	// work2api 风格管理接口：为新 WebUI 提供同一组资源命名。
+	h.mux.HandleFunc("GET /admin/health", h.compatHealth)
+	h.mux.HandleFunc("GET /admin/overview", h.compatOverview)
+	h.mux.HandleFunc("GET /admin/accounts", h.compatAccounts)
+	h.mux.HandleFunc("POST /admin/accounts/{uid}/enable", h.withAdminAuth(h.compatEnableAccount))
+	h.mux.HandleFunc("POST /admin/accounts/{uid}/disable", h.withAdminAuth(h.compatDisableAccount))
+	h.mux.HandleFunc("POST /admin/accounts/{uid}/alias", h.withAdminAuth(h.compatAliasAccount))
+	h.mux.HandleFunc("DELETE /admin/accounts/{uid}", h.withAdminAuth(h.compatDeleteAccount))
+	h.mux.HandleFunc("POST /admin/credits/refresh", h.withAdminAuth(h.compatRefreshCredits))
+	h.mux.HandleFunc("POST /admin/checkin", h.withAdminAuth(h.compatCheckin))
+	h.mux.HandleFunc("GET /admin/models", h.compatModels)
+	h.mux.HandleFunc("GET /admin/models/catalog", h.compatModelCatalog)
+	h.mux.HandleFunc("POST /admin/models/refresh", h.withAdminAuth(h.compatRefreshModels))
+	h.mux.HandleFunc("GET /admin/providers", h.compatProviders)
+	h.mux.HandleFunc("GET /admin/providers/{name}", h.compatProvider)
+	h.mux.HandleFunc("GET /admin/usage/summary", h.compatUsageSummary)
+	h.mux.HandleFunc("GET /admin/usage/timeseries", h.compatUsageTimeseries)
+	h.mux.HandleFunc("GET /admin/usage/recent", h.compatUsageRecent)
+	h.mux.HandleFunc("GET /admin/settings", h.compatSettings)
+	h.mux.HandleFunc("POST /admin/settings", h.withAdminAuth(h.compatSaveSettings))
 	// Web 登录闭环
 	h.mux.HandleFunc("POST /admin/api/login", h.withAdminAuth(h.adminLoginStart))
 	h.mux.HandleFunc("GET /admin/api/login/result", h.adminLoginResult)
@@ -337,6 +367,7 @@ func setModelInBody(body []byte, configName string) []byte {
 }
 
 func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
+	startedAt := time.Now()
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "read body: "+err.Error())
@@ -419,10 +450,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		if peek.Stream {
 			h.cfg.Pool.NoteSuccess(acct.UID)
 			// 流内业务错误（1005 plan/5xx 等）→ 冷却账号，错误信息注入 SSE。
-			_ = upstream.StreamWithError(w, rc, func(se *upstream.SOLOStreamError) {
+			streamErr := upstream.StreamWithError(w, rc, func(se *upstream.SOLOStreamError) {
 				h.handleStreamError(acct.UID, se)
 			})
 			rc.Close()
+			h.usage.record(configName, acct.UID, "chat", 0, streamErr == nil, startedAt)
 			return
 		}
 		resp, err := upstream.Aggregate(rc)
@@ -444,6 +476,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.cfg.Pool.NoteSuccess(acct.UID)
+		h.usage.record(configName, acct.UID, "chat", tokensFromResponse(resp), true, startedAt)
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
